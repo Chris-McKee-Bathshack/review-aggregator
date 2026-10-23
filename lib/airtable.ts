@@ -138,7 +138,9 @@ export async function getLatestRun(): Promise<RunRecord | null> {
   const url = new URL(baseUrl("Runs"));
   url.searchParams.set("sort[0][field]", "Run At");
   url.searchParams.set("sort[0][direction]", "desc");
-  url.searchParams.set("pageSize", "1");
+  // Fetch a few rows, not one: new Airtable tables ship with blank placeholder rows,
+  // and those must never be mistaken for a real run.
+  url.searchParams.set("pageSize", "10");
 
   const res = await fetch(url.toString(), { headers: airtableHeaders() });
   if (!res.ok) {
@@ -146,15 +148,20 @@ export async function getLatestRun(): Promise<RunRecord | null> {
     return null;
   }
   const data = (await res.json()) as { records: { fields: Record<string, any> }[] };
-  const record = data.records[0];
-  if (!record) return null;
 
-  return {
-    runAt: record.fields["Run At"] ?? "",
-    status: record.fields["Status"] ?? "unknown",
-    message: record.fields["Message"] ?? "",
-    locationsUpdated: record.fields["Locations Updated"] ?? 0,
-  };
+  for (const record of data.records) {
+    const runAt = record.fields["Run At"];
+    const status = record.fields["Status"];
+    if (!runAt || !status) continue; // blank row — not a recorded run
+
+    return {
+      runAt,
+      status,
+      message: record.fields["Message"] ?? "",
+      locationsUpdated: record.fields["Locations Updated"] ?? 0,
+    };
+  }
+  return null;
 }
 
 export type LatestSnapshotRow = {
@@ -176,10 +183,13 @@ export async function getLatestSnapshots(): Promise<LatestSnapshotRow[]> {
     return [];
   }
   const data = (await res.json()) as { records: { fields: Record<string, any> }[] };
-  if (data.records.length === 0) return [];
 
-  const latestWeek = data.records[0].fields["Week Ending"];
-  return data.records
+  // Ignore blank placeholder rows (no showroom or no week) so they can't appear as data.
+  const real = data.records.filter((r) => r.fields["Week Ending"] && r.fields["Location"]);
+  if (real.length === 0) return [];
+
+  const latestWeek = real[0].fields["Week Ending"];
+  return real
     .filter((r) => r.fields["Week Ending"] === latestWeek)
     .map((r) => ({
       location: r.fields["Location"] ?? "",

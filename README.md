@@ -52,6 +52,10 @@ Manchester, Tileshack at Huttons — Name as e.g. "Bathshack Ballymena", Town as
 | Message | Long text |
 | Locations Updated | Number (integer) |
 
+New Airtable tables start with a few blank placeholder rows. Delete them from all three tables
+(in Locations, be careful to keep your real showroom rows) so they don't count towards
+Airtable's record limit. The app ignores blank rows either way.
+
 Then: Account → Developer hub → Personal access tokens → **Create new token**, name it
 `review-aggregator`, scope it to **only** this base, with `data.records:read` and
 `data.records:write` scopes (nothing broader). Copy the token and the base ID (from the base's
