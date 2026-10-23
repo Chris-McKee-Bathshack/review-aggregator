@@ -12,19 +12,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// UK clocks shift between GMT and BST, but Vercel cron schedules are fixed in UTC.
-// vercel.json fires this at both 06:00 and 07:00 UTC every Monday; whichever of
-// those is actually 06:00 in Europe/London does the work, the other is a no-op.
-const INTENDED_LONDON_HOUR = 6;
-
-function currentLondonHour(): number {
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/London",
-    hour: "numeric",
-    hour12: false,
-  });
-  return parseInt(formatter.format(new Date()), 10);
-}
+// Scheduling: vercel.json fires this once, every Monday at 06:00 UTC. On Vercel's Hobby plan
+// a cron can only run once a day and may fire anywhere within that hour (06:00-06:59 UTC),
+// i.e. roughly 06:00-07:59 UK time depending on GMT/BST. Because it runs only once, there is
+// no UK-hour check: whenever the scheduled call arrives, it does the work.
+// (If you move to the Pro plan, you can switch to the double-trigger + London-hour check
+// pattern for exact UK-time scheduling.)
 
 // The cron covers the 7 days up to and including yesterday (Sunday, when this runs Monday).
 function weekEndingDate(): string {
@@ -44,12 +37,6 @@ function isAuthorized(req: NextRequest): boolean {
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  // ?force=1 skips the UK-hour check so you can test on demand. It still needs the bearer secret above.
-  const force = req.nextUrl.searchParams.get("force") === "1";
-  if (!force && currentLondonHour() !== INTENDED_LONDON_HOUR) {
-    return NextResponse.json({ skipped: true, reason: "not the intended UK hour" });
   }
 
   let locationsResolvedThisRun = 0;

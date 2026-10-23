@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/weekly-review-pull",
-      "schedule": "0 6,7 * * 1"
+      "schedule": "0 6 * * 1"
     }
   ]
 }

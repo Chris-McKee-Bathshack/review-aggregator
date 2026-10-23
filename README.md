@@ -4,7 +4,7 @@ Weekly, automated pull of each showroom's Google rating + review count, replacin
 monthly check. First engine in what will grow into a multi-platform review aggregator
 (TrustPilot and reviews.io next). Headless — no login-gated UI beyond a one-page status check.
 
-## What it does, every Monday morning (UK time)
+## What it does, every Monday morning
 
 1. Checks Airtable's `Locations` table for any showroom missing a cached Place ID, and resolves
    it via Google's Places API (one-time per showroom — after that, it's cached and skipped).
@@ -93,17 +93,20 @@ set env vars in step 4 — no code change needed.
 
 ## 5. Test it before trusting the Monday run
 
-The cron route normally only does its work at 6am UK time on Mondays. To run it on demand, add
-`?force=1` and supply the bearer secret (on Windows, use `curl.exe` rather than `curl`):
+The cron route only does its work when called with the bearer secret. To run it on demand
+(on Windows, use `curl.exe` rather than `curl`):
 
 ```bash
-curl -H "Authorization: Bearer <your CRON_SECRET>" "https://<your-vercel-url>/api/cron/weekly-review-pull?force=1"
+curl -H "Authorization: Bearer <your CRON_SECRET>" "https://<your-vercel-url>/api/cron/weekly-review-pull"
 ```
 
-A forced run is a real run: it writes snapshot rows to Airtable and sends the digest email. Once
+A manual run is a real run: it writes snapshot rows to Airtable and sends the digest email. Once
 you've checked the results, delete the test rows from `Weekly Snapshots` and `Runs` so the first
-real Monday run doesn't sit alongside duplicates. Without `?force=1`, a call outside 6am UK time
-returns `{"skipped":true,...}`, which is expected.
+real Monday run doesn't sit alongside duplicates. A call without the right secret returns 401.
+
+**Schedule (Hobby plan):** `vercel.json` runs the job once, Mondays at 06:00 UTC. Hobby crons can
+fire anywhere within that hour, so expect the digest between roughly 06:00 and 08:00 UK time
+(depending on GMT/BST). On the Pro plan you can switch to per-minute precision if you need it.
 
 First real run will take slightly longer than later ones, since it's resolving all 13 Place IDs.
 Worth eyeballing the resolved IDs in Airtable's Locations table afterwards — a generic name
