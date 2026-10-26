@@ -1,8 +1,6 @@
 {
   "crons": [
-    {
-      "path": "/api/cron/weekly-review-pull",
-      "schedule": "0 6 * * 1"
-    }
+    { "path": "/api/cron/weekly-review-pull", "schedule": "0 6 * * 1" },
+    { "path": "/api/cron/monthly-review-update", "schedule": "0 6 1 * *" }
   ]
 }

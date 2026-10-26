@@ -21,6 +21,8 @@
 //   - Message (long text)
 //   - Locations Updated (number)
 
+import type { Snapshot } from "./changes";
+
 const AIRTABLE_API_BASE = "https://api.airtable.com/v0";
 
 function airtableHeaders() {
@@ -164,39 +166,40 @@ export async function getLatestRun(): Promise<RunRecord | null> {
   return null;
 }
 
-export type LatestSnapshotRow = {
-  location: string;
-  rating: number | null;
-  reviewCount: number | null;
-  weekEnding: string;
-};
+/** Every real snapshot row, for week-on-week / month-on-month comparisons. */
+export async function getAllSnapshots(): Promise<Snapshot[]> {
+  const snapshots: Snapshot[] = [];
+  let offset: string | undefined;
 
-export async function getLatestSnapshots(): Promise<LatestSnapshotRow[]> {
-  const url = new URL(baseUrl("Weekly Snapshots"));
-  url.searchParams.set("sort[0][field]", "Week Ending");
-  url.searchParams.set("sort[0][direction]", "desc");
-  url.searchParams.set("pageSize", "100");
+  do {
+    const url = new URL(baseUrl("Weekly Snapshots"));
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
 
-  const res = await fetch(url.toString(), { headers: airtableHeaders() });
-  if (!res.ok) {
-    console.error(`Airtable getLatestSnapshots failed: ${res.status} ${await res.text()}`);
-    return [];
-  }
-  const data = (await res.json()) as { records: { fields: Record<string, any> }[] };
+    const res = await fetch(url.toString(), { headers: airtableHeaders() });
+    if (!res.ok) {
+      throw new Error(`Airtable list Weekly Snapshots failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as {
+      records: { fields: Record<string, any> }[];
+      offset?: string;
+    };
 
-  // Ignore blank placeholder rows (no showroom or no week) so they can't appear as data.
-  const real = data.records.filter((r) => r.fields["Week Ending"] && r.fields["Location"]);
-  if (real.length === 0) return [];
+    for (const r of data.records) {
+      const location = r.fields["Location"];
+      const weekEnding = r.fields["Week Ending"];
+      if (!location || !weekEnding) continue; // blank placeholder row, not a snapshot
+      snapshots.push({
+        location,
+        weekEnding,
+        rating: typeof r.fields["Rating"] === "number" ? r.fields["Rating"] : null,
+        reviewCount: typeof r.fields["Review Count"] === "number" ? r.fields["Review Count"] : null,
+      });
+    }
+    offset = data.offset;
+  } while (offset);
 
-  const latestWeek = real[0].fields["Week Ending"];
-  return real
-    .filter((r) => r.fields["Week Ending"] === latestWeek)
-    .map((r) => ({
-      location: r.fields["Location"] ?? "",
-      rating: typeof r.fields["Rating"] === "number" ? r.fields["Rating"] : null,
-      reviewCount: typeof r.fields["Review Count"] === "number" ? r.fields["Review Count"] : null,
-      weekEnding: r.fields["Week Ending"] ?? "",
-    }));
+  return snapshots;
 }
 
 export async function logRun(

@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listActiveLocations,
-  updateLocationPlaceId,
-  createWeeklySnapshots,
-  logRun,
-} from "@/lib/airtable";
-import { resolvePlaceId, getPlaceRating } from "@/lib/places";
-import { sendWeeklyDigest, sendFailureAlert, type DigestRow } from "@/lib/email";
+import { getAllSnapshots, logRun } from "@/lib/airtable";
+import { sendWeeklyDigest, sendFailureAlert } from "@/lib/email";
+import { computeChanges, latestBefore, summarise } from "@/lib/changes";
+import { pullAndStore, yesterdayLondon } from "@/lib/pull";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,16 +12,7 @@ export const maxDuration = 60;
 // a cron can only run once a day and may fire anywhere within that hour (06:00-06:59 UTC),
 // i.e. roughly 06:00-07:59 UK time depending on GMT/BST. Because it runs only once, there is
 // no UK-hour check: whenever the scheduled call arrives, it does the work.
-// (If you move to the Pro plan, you can switch to the double-trigger + London-hour check
-// pattern for exact UK-time scheduling.)
-
-// The cron covers the 7 days up to and including yesterday (Sunday, when this runs Monday).
-function weekEndingDate(): string {
-  const now = new Date();
-  const londonNow = new Date(now.toLocaleString("en-US", { timeZone: "Europe/London" }));
-  londonNow.setDate(londonNow.getDate() - 1);
-  return londonNow.toISOString().slice(0, 10);
-}
+// The monthly update is a separate job (/api/cron/monthly-review-update, 1st of the month).
 
 function isAuthorized(req: NextRequest): boolean {
   const expected = process.env.CRON_SECRET;
@@ -34,96 +21,56 @@ function isAuthorized(req: NextRequest): boolean {
   return header === `Bearer ${expected}`;
 }
 
+function errorText(err: unknown): string {
+  return err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let locationsResolvedThisRun = 0;
+  const weekEnding = yesterdayLondon();
+  let placeIdsResolved = 0;
 
   try {
-    const locations = await listActiveLocations();
+    // Read history BEFORE writing this week's rows, so "previous" really means previous.
+    const history = await getAllSnapshots();
+    const result = await pullAndStore(weekEnding, history, { write: true });
+    placeIdsResolved = result.placeIdsResolved;
 
-    // Resolve any Place IDs we haven't cached yet (first run, or a newly added showroom).
-    for (const loc of locations) {
-      if (!loc.placeId) {
-        const resolved = await resolvePlaceId(loc.name, loc.town);
-        if (resolved) {
-          await updateLocationPlaceId(loc.id, resolved);
-          loc.placeId = resolved;
-          locationsResolvedThisRun += 1;
-        }
-      }
-    }
+    const changes = computeChanges(result.current, latestBefore(history, weekEnding));
+    await sendWeeklyDigest(changes, summarise(changes), weekEnding);
 
-    const weekEnding = weekEndingDate();
-    const digestRows: DigestRow[] = [];
-    const snapshotRows: {
-      weekEnding: string;
-      location: string;
-      placeId: string;
-      rating: number | null;
-      reviewCount: number | null;
-    }[] = [];
-
-    for (const loc of locations) {
-      if (!loc.placeId) {
-        // Couldn't resolve a Place ID even after trying above — surface as "not checked", not zero.
-        digestRows.push({ location: loc.name, rating: null, reviewCount: null });
-        continue;
-      }
-
-      const rating = await getPlaceRating(loc.placeId);
-      digestRows.push({
-        location: loc.name,
-        rating: rating?.rating ?? null,
-        reviewCount: rating?.reviewCount ?? null,
-      });
-      snapshotRows.push({
-        weekEnding,
-        location: loc.name,
-        placeId: loc.placeId,
-        rating: rating?.rating ?? null,
-        reviewCount: rating?.reviewCount ?? null,
-      });
-    }
-
-    if (snapshotRows.length > 0) {
-      await createWeeklySnapshots(snapshotRows);
-    }
-
-    await sendWeeklyDigest(digestRows, weekEnding);
-
-    const notCheckedCount = digestRows.filter((r) => r.rating === null).length;
+    const notChecked = result.current.filter((r) => r.rating === null).length;
     await logRun(
       "success",
-      `Pulled ${digestRows.length} showrooms (${notCheckedCount} not checked), resolved ${locationsResolvedThisRun} new Place IDs.`,
-      locationsResolvedThisRun
+      `Weekly pull: ${result.current.length} showrooms (${notChecked} not checked), resolved ${placeIdsResolved} new Place IDs.`,
+      placeIdsResolved
     );
 
     return NextResponse.json({
       ok: true,
       weekEnding,
-      locationsChecked: digestRows.length,
-      notChecked: notCheckedCount,
-      placeIdsResolved: locationsResolvedThisRun,
+      locationsChecked: result.current.length,
+      notChecked,
+      placeIdsResolved,
     });
   } catch (err) {
-    const message = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    const message = errorText(err);
     console.error("Weekly review pull failed:", message);
 
-    // Don't let a failed digest/log call hide the original failure from Chris.
+    // Don't let a failed alert/log call hide the original failure from Chris.
     try {
-      await sendFailureAlert(message);
+      await sendFailureAlert("weekly Google pull", message);
     } catch (alertErr) {
       console.error("Also failed to send the failure alert email:", alertErr);
     }
     try {
-      await logRun("failed", message, locationsResolvedThisRun);
+      await logRun("failed", `Weekly pull: ${message}`, placeIdsResolved);
     } catch (logErr) {
       console.error("Also failed to log the failed run to Airtable:", logErr);
     }
-
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json({ ok: false, job: "weekly", error: message }, { status: 500 });
   }
 }

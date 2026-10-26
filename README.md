@@ -10,8 +10,13 @@ monthly check. First engine in what will grow into a multi-platform review aggre
    it via Google's Places API (one-time per showroom — after that, it's cached and skipped).
 2. Pulls the current rating + review count for every active showroom.
 3. Writes a snapshot row per showroom into Airtable's `Weekly Snapshots` table.
-4. Emails you a digest (summary table + an attached spreadsheet) via Resend.
-5. Logs the run (success/failure) to Airtable's `Runs` table, and emails a failure alert if
+4. Compares each showroom with its previous weekly snapshot (new reviews, rating change) and
+   emails you a digest (summary, table and an attached spreadsheet) via Resend.
+5. Separately, on the **1st of every month** (its own cron job), it pulls fresh figures, stores
+   them as a month-end snapshot (dated the last day of the month just ended) and emails a
+   **monthly update** comparing with the previous month-end snapshot, with highlights and a
+   new-reviews-per-week figure.
+6. Logs the run (success/failure) to Airtable's `Runs` table, and emails a failure alert if
    anything went wrong — so a bad week never shows up as silence.
 
 ## 1. Set up Airtable
@@ -104,13 +109,29 @@ The cron route only does its work when called with the bearer secret. To run it 
 curl -H "Authorization: Bearer <your CRON_SECRET>" "https://<your-vercel-url>/api/cron/weekly-review-pull"
 ```
 
-A manual run is a real run: it writes snapshot rows to Airtable and sends the digest email. Once
-you've checked the results, delete the test rows from `Weekly Snapshots` and `Runs` so the first
-real Monday run doesn't sit alongside duplicates. A call without the right secret returns 401.
+A manual run is a real run: it writes snapshot rows to Airtable and sends the weekly digest email.
+To test the monthly update, call `/api/cron/monthly-review-update?preview=1` the same way. It
+sends the monthly email using live figures but stores no snapshot, so it is safe to repeat. Without
+`?preview=1` it stores a snapshot dated yesterday, so only do that on the 1st.
 
-**Schedule (Hobby plan):** `vercel.json` runs the job once, Mondays at 06:00 UTC. Hobby crons can
+**Keep your first test snapshot.** Week-on-week changes need an earlier snapshot to compare with,
+so your first test run becomes the baseline. Only delete test rows if you ran several on the same
+day (duplicates for the same showroom and week). The very first digest will show "n/a" for
+changes; they appear from the second snapshot onwards. The monthly update compares with the
+previous month-end snapshot, and until one exists it falls back to each showroom's earliest
+snapshot (the dates it used are shown in the email). If you want a proper first monthly
+comparison, add rows to `Weekly Snapshots` by hand for the last day of last month (Week Ending =
+that date, plus Location, Rating, Review Count). The weekly comparison always looks back about
+seven days, so these month-end rows don't distort it.
+A call without the right secret returns 401.
+
+**Schedule (Hobby plan):** `vercel.json` runs the weekly job Mondays at 06:00 UTC and the monthly job on the 1st at 06:00 UTC. Hobby crons can
 fire anywhere within that hour, so expect the digest between roughly 06:00 and 08:00 UK time
 (depending on GMT/BST). On the Pro plan you can switch to per-minute precision if you need it.
+
+**Record limit:** Airtable's free plan allows 1,000 records per base. At 13 showrooms, weekly plus
+month-end snapshots add about 830 records a year, so roughly 14 months of history; plan a move to a paid Airtable plan or a database such as
+Neon before then.
 
 First real run will take slightly longer than later ones, since it's resolving all 13 Place IDs.
 Worth eyeballing the resolved IDs in Airtable's Locations table afterwards — a generic name
@@ -130,3 +151,15 @@ Two more gates from the Bathshack build standards, once you're happy it's workin
   directly: App Name "Review Aggregator", one-line description, the Vercel URL as Domain,
   Category "Reporting", Owner "Chris McKee", Uses Anthropic API: No, Key Status: fresh dedicated
   keys (Google Places + Airtable PAT + Resend, none reused from another app).
+
+## What the figures mean (and don't)
+
+- **New reviews** is the change in each showroom's total review count since the comparison
+  snapshot. If a review is deleted, it can show lower than the true number received.
+- **Rating change** uses Google's rating, which is rounded to one decimal place, so small
+  movements may not show until they cross a rounding point.
+- **Average score for the week, or a 4-5 star vs 1-2 star split, is not available** from this
+  data source: the Places API only returns the overall rating, the total count and at most five
+  reviews. That would need the Google Business Profile API, which requires a separate access
+  application and a verified owner account.
+- Anything that couldn't be checked shows "not checked" or "n/a", never 0.
