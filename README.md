@@ -163,3 +163,12 @@ Two more gates from the Bathshack build standards, once you're happy it's workin
   reviews. That would need the Google Business Profile API, which requires a separate access
   application and a verified owner account.
 - Anything that couldn't be checked shows "not checked" or "n/a", never 0.
+
+## If a run reports problems
+
+The weekly and monthly jobs now say why a showroom couldn't be checked (Google's status code and
+message), in the digest and in a separate alert email. If every showroom fails, you get only the
+alert, and the Runs table records `failed`. If only some fail, the digest is sent, the alert lists
+them, and Runs records `partial`. Failed checks are never stored as snapshots. Common causes: the
+API key was deleted, restricted or rotated, billing was switched off on the Google Cloud project,
+or Places API (New) was disabled. After fixing the cause, re-run the weekly URL from step 5.

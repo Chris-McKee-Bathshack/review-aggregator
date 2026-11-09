@@ -35,7 +35,12 @@ export default async function StatusPage() {
           Last run failed at {formatRunTime(run.runAt)} — figures below are from an earlier run.
         </p>
       )}
-      {run && run.status !== "success" && run.status !== "failed" && (
+      {run?.status === "partial" && (
+        <p style={{ color: "#a16207" }}>
+          Last run at {formatRunTime(run.runAt)} only partly worked — some showrooms were not checked.
+        </p>
+      )}
+      {run && run.status !== "success" && run.status !== "failed" && run.status !== "partial" && (
         <p style={{ color: "#a16207" }}>
           Last run has an unrecognised status ("{run.status}") at {formatRunTime(run.runAt)}.
         </p>

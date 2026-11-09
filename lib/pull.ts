@@ -13,7 +13,13 @@ export function yesterdayLondon(): string {
   return londonNow.toISOString().slice(0, 10);
 }
 
-export type PullResult = { current: CurrentRow[]; placeIdsResolved: number; rowsWritten: number };
+export type PullResult = {
+  current: CurrentRow[];
+  placeIdsResolved: number;
+  rowsWritten: number;
+  /** One line per showroom that could not be checked, with the reason. */
+  problems: string[];
+};
 
 export async function pullAndStore(
   snapshotDate: string,
@@ -36,17 +42,29 @@ export async function pullAndStore(
   }
 
   const current: CurrentRow[] = [];
+  const problems: string[] = [];
   const toWrite: { weekEnding: string; location: string; placeId: string; rating: number | null; reviewCount: number | null }[] = [];
 
   for (const loc of locations) {
     if (!loc.placeId) {
       // Couldn't resolve a Place ID — surface as "not checked", never as zero.
       current.push({ location: loc.name, rating: null, reviewCount: null });
+      problems.push(`${loc.name}: no Place ID could be found`);
       continue;
     }
-    const rating = await getPlaceRating(loc.placeId);
-    const row = { location: loc.name, rating: rating?.rating ?? null, reviewCount: rating?.reviewCount ?? null };
+    const lookup = await getPlaceRating(loc.placeId);
+    const row = {
+      location: loc.name,
+      rating: lookup.rating?.rating ?? null,
+      reviewCount: lookup.rating?.reviewCount ?? null,
+    };
     current.push(row);
+
+    // A failed check is never stored: an empty snapshot is useless as a baseline and uses up record allowance.
+    if (lookup.error) {
+      problems.push(`${loc.name}: ${lookup.error}`);
+      continue;
+    }
 
     // If the other job already stored a real snapshot for this showroom and date, don't store a second one.
     const alreadyStored = history.some(
@@ -56,5 +74,5 @@ export async function pullAndStore(
   }
 
   if (options.write && toWrite.length > 0) await createWeeklySnapshots(toWrite);
-  return { current, placeIdsResolved, rowsWritten: options.write ? toWrite.length : 0 };
+  return { current, placeIdsResolved, rowsWritten: options.write ? toWrite.length : 0, problems };
 }

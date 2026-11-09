@@ -39,21 +39,39 @@ export async function GET(req: NextRequest) {
     const result = await pullAndStore(weekEnding, history, { write: true });
     placeIdsResolved = result.placeIdsResolved;
 
+    // Every showroom failing is a failed job, not a digest full of "not checked".
+    if (result.problems.length > 0 && result.problems.length === result.current.length) {
+      throw new Error(
+        `None of the ${result.current.length} showrooms could be checked.\n${result.problems.slice(0, 3).join("\n")}`
+      );
+    }
+
     const changes = computeChanges(result.current, latestBefore(history, weekEnding));
-    await sendWeeklyDigest(changes, summarise(changes), weekEnding);
+    await sendWeeklyDigest(changes, summarise(changes), weekEnding, result.problems);
 
     const notChecked = result.current.filter((r) => r.rating === null).length;
-    await logRun(
-      "success",
-      `Weekly pull: ${result.current.length} showrooms (${notChecked} not checked), resolved ${placeIdsResolved} new Place IDs.`,
-      placeIdsResolved
-    );
+    if (result.problems.length > 0) {
+      const detail = `Weekly pull PARTIAL: ${result.problems.length} of ${result.current.length} showrooms not checked.\n${result.problems.join("\n")}`;
+      await logRun("partial", detail, placeIdsResolved);
+      try {
+        await sendFailureAlert("weekly Google pull (partly failed)", detail);
+      } catch (alertErr) {
+        console.error("Also failed to send the failure alert email:", alertErr);
+      }
+    } else {
+      await logRun(
+        "success",
+        `Weekly pull: ${result.current.length} showrooms checked, resolved ${placeIdsResolved} new Place IDs.`,
+        placeIdsResolved
+      );
+    }
 
     return NextResponse.json({
-      ok: true,
+      ok: result.problems.length === 0,
       weekEnding,
       locationsChecked: result.current.length,
       notChecked,
+      problems: result.problems,
       placeIdsResolved,
     });
   } catch (err) {

@@ -93,6 +93,9 @@ function renderTable(changes: Change[], newLabel: string): string {
 }
 
 function renderSummary(summary: Summary, newLabel: string): string {
+  if (summary.showroomsCompared === 0 && summary.totalReviews === 0) {
+    return `<p><strong>All showrooms:</strong> no figures available this time.</p>`;
+  }
   const lines: string[] = [`<strong>All showrooms:</strong> ${summary.totalReviews.toLocaleString("en-GB")} reviews in total`];
   if (summary.totalNewReviews !== null) {
     lines[0] += `, ${newLabel.toLowerCase()} ${newReviewsText(summary.totalNewReviews)}`;
@@ -106,10 +109,13 @@ function renderSummary(summary: Summary, newLabel: string): string {
   return `<p>${lines.join("<br>")}</p>`;
 }
 
-function notCheckedNote(changes: Change[]): string {
-  return changes.some((c) => c.rating === null || c.reviewCount === null)
-    ? `<p>One or more showrooms couldn't be checked, so they show "not checked" rather than a figure. Please don't read that as zero.</p>`
-    : "";
+function notCheckedNote(changes: Change[], problems: string[] = []): string {
+  if (!changes.some((c) => c.rating === null || c.reviewCount === null) && problems.length === 0) return "";
+  const reasons =
+    problems.length > 0
+      ? `<p>What went wrong:</p><ul>${problems.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
+      : "";
+  return `<p>One or more showrooms couldn't be checked, so they show "not checked" rather than a figure. Please don't read that as zero.</p>${reasons}`;
 }
 
 async function buildWorkbook(
@@ -154,7 +160,12 @@ async function buildWorkbook(
 
 // ---------- weekly digest ----------
 
-export async function sendWeeklyDigest(changes: Change[], summary: Summary, weekEnding: string): Promise<void> {
+export async function sendWeeklyDigest(
+  changes: Change[],
+  summary: Summary,
+  weekEnding: string,
+  problems: string[] = []
+): Promise<void> {
   const newLabel = "New this week";
   const buffer = await buildWorkbook(changes, "Google Reviews", newLabel, `Week ending ${weekEnding}`);
 
@@ -162,7 +173,7 @@ export async function sendWeeklyDigest(changes: Change[], summary: Summary, week
     <p><strong>Google Reviews — week ending ${formatDate(weekEnding)}</strong><br>${comparisonText(summary, "week")}</p>
     ${renderSummary(summary, newLabel)}
     ${renderTable(changes, newLabel)}
-    ${notCheckedNote(changes)}
+    ${notCheckedNote(changes, problems)}
     <p>Full table attached as a spreadsheet. Ratings are rounded to one decimal place by Google, so small movements in a showroom's score may not show until they cross a rounding point; the review count is exact.</p>
   `;
 
@@ -206,7 +217,12 @@ function highlights(changes: Change[]): string {
   return `<p>${parts.join("<br>")}</p>`;
 }
 
-export async function sendMonthlyDigest(changes: Change[], summary: Summary, weekEnding: string): Promise<void> {
+export async function sendMonthlyDigest(
+  changes: Change[],
+  summary: Summary,
+  weekEnding: string,
+  problems: string[] = []
+): Promise<void> {
   const newLabel = "New this period";
   const earliest = summary.baselineDates[0];
   const periodDays = earliest ? daysBetween(earliest, weekEnding) : null;
@@ -228,7 +244,7 @@ export async function sendMonthlyDigest(changes: Change[], summary: Summary, wee
     ${perWeek}
     ${highlights(changes)}
     ${renderTable(changes, newLabel)}
-    ${notCheckedNote(changes)}
+    ${notCheckedNote(changes, problems)}
     <p>This compares the figures pulled this morning (stored as the month-end snapshot) with the previous month-end snapshot. Where an earlier month-end isn't on record yet, it uses the closest earlier snapshot and says so above. Full table attached as a spreadsheet.</p>
   `;
 

@@ -39,26 +39,47 @@ export type PlaceRating = {
   reviewCount: number | null;
 };
 
+export type PlaceLookup = {
+  rating: PlaceRating | null;
+  /** Why the check failed (HTTP status + Google's message), or null if the call worked. Never contains the API key. */
+  error: string | null;
+};
+
+function shorten(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
 /**
  * Current aggregate rating + review count for a Place ID.
- * Returns null (not zeros) on any failure — a failed call is "not checked", never "no reviews".
+ * A failed call returns rating: null plus the reason, never zeros: "not checked" is not "no reviews".
  */
-export async function getPlaceRating(placeId: string): Promise<PlaceRating | null> {
-  const res = await fetch(`${PLACES_API_BASE}/places/${encodeURIComponent(placeId)}`, {
-    headers: {
-      "X-Goog-Api-Key": apiKey(),
-      "X-Goog-FieldMask": "rating,userRatingCount",
-    },
-  });
+export async function getPlaceRating(placeId: string): Promise<PlaceLookup> {
+  const url = `${PLACES_API_BASE}/places/${encodeURIComponent(placeId)}`;
+  const init = { headers: { "X-Goog-Api-Key": apiKey(), "X-Goog-FieldMask": "rating,userRatingCount" } };
 
-  if (!res.ok) {
-    console.error(`Place Details failed for ${placeId}: ${res.status} ${await res.text()}`);
-    return null;
+  let lastError = "unknown error";
+  // One retry for transient problems (rate limit or Google-side 5xx / network blip).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const res = await fetch(url, init);
+      if (res.ok) {
+        const data = (await res.json()) as { rating?: number; userRatingCount?: number };
+        return {
+          rating: {
+            rating: typeof data.rating === "number" ? data.rating : null,
+            reviewCount: typeof data.userRatingCount === "number" ? data.userRatingCount : null,
+          },
+          error: null,
+        };
+      }
+      lastError = `Google returned ${res.status}: ${shorten(await res.text())}`;
+      console.error(`Place Details failed for ${placeId}: ${lastError}`);
+      if (res.status !== 429 && res.status < 500) break; // permanent (key, billing, permissions): don't retry
+    } catch (err) {
+      lastError = `Network error: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(`Place Details failed for ${placeId}: ${lastError}`);
+    }
   }
-
-  const data = (await res.json()) as { rating?: number; userRatingCount?: number };
-  return {
-    rating: typeof data.rating === "number" ? data.rating : null,
-    reviewCount: typeof data.userRatingCount === "number" ? data.userRatingCount : null,
-  };
+  return { rating: null, error: lastError };
 }

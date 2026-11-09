@@ -37,24 +37,41 @@ export async function GET(req: NextRequest) {
     const history = await getAllSnapshots();
     const result = await pullAndStore(snapshotDate, history, { write: !preview });
 
+    if (result.problems.length > 0 && result.problems.length === result.current.length) {
+      throw new Error(
+        `None of the ${result.current.length} showrooms could be checked.\n${result.problems.slice(0, 3).join("\n")}`
+      );
+    }
+
     const target = monthlyTargetWeekEnding(snapshotDate);
     const changes = computeChanges(result.current, monthlyBaseline(history, snapshotDate, target));
-    await sendMonthlyDigest(changes, summarise(changes), snapshotDate);
+    await sendMonthlyDigest(changes, summarise(changes), snapshotDate, result.problems);
 
     const notChecked = result.current.filter((r) => r.rating === null).length;
-    await logRun(
-      "success",
-      `Monthly update${preview ? " (preview, nothing stored)" : ""}: ${result.current.length} showrooms (${notChecked} not checked), snapshot ${snapshotDate}, compared with ${target} or earlier.`,
-      result.placeIdsResolved
-    );
+    if (result.problems.length > 0) {
+      const detail = `Monthly update PARTIAL: ${result.problems.length} of ${result.current.length} showrooms not checked.\n${result.problems.join("\n")}`;
+      await logRun("partial", detail, result.placeIdsResolved);
+      try {
+        await sendFailureAlert("monthly Google update (partly failed)", detail);
+      } catch (alertErr) {
+        console.error("Also failed to send the failure alert email:", alertErr);
+      }
+    } else {
+      await logRun(
+        "success",
+        `Monthly update${preview ? " (preview, nothing stored)" : ""}: ${result.current.length} showrooms checked, snapshot ${snapshotDate}, compared with ${target} or earlier.`,
+        result.placeIdsResolved
+      );
+    }
 
     return NextResponse.json({
-      ok: true,
+      ok: result.problems.length === 0,
       preview,
       snapshotDate,
       comparedWithOnOrBefore: target,
       locationsChecked: result.current.length,
       notChecked,
+      problems: result.problems,
       rowsWritten: result.rowsWritten,
     });
   } catch (err) {

@@ -203,7 +203,7 @@ export async function getAllSnapshots(): Promise<Snapshot[]> {
 }
 
 export async function logRun(
-  status: "success" | "failed",
+  status: "success" | "failed" | "partial",
   message: string,
   locationsUpdated: number
 ): Promise<void> {
